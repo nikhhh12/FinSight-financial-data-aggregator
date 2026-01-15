@@ -3,7 +3,7 @@
 import {NAV_ITEMS} from "@/lib/constants";
 import Link from "next/link";
 import {usePathname} from "next/navigation";
-import SearchCommand from "@/components/SearchCommand";
+// import SearchCommand from "@/components/SearchCommand";
 
 const NavItems = ({initialStocks}: { initialStocks: StockWithWatchlistStatus[]}) => {
     const pathname = usePathname()
