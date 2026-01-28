@@ -22,7 +22,7 @@ async function fetchJSON<T>(url: string, revalidateSeconds?: number): Promise<T>
 
 export { fetchJSON };
 
-export async function getNews(symbols?: string[]): Promise<MarketNewsArticle[]> {
+export async function getNews(symbols?: string[], category: string = 'general'): Promise<MarketNewsArticle[]> {
   try {
     const range = getDateRange(5);
     const token = process.env.FINNHUB_API_KEY ?? NEXT_PUBLIC_FINNHUB_API_KEY;
@@ -33,7 +33,23 @@ export async function getNews(symbols?: string[]): Promise<MarketNewsArticle[]> 
       .map((s) => s?.trim().toUpperCase())
       .filter((s): s is string => Boolean(s));
 
-    const maxArticles = 6;
+    const maxArticles = 15;
+
+    // Specific logic for 'market' tab if we want to show stock market news
+    const newsCategory = category === 'World markets' ? 'general' : 'general'; // Use general for broad coverage
+
+    const isGenericLogo = (url: string) => {
+      const lower = url.toLowerCase();
+      // Filter out known placeholder patterns
+      return (
+        lower.includes('logo') ||
+        lower.includes('brand') ||
+        lower.includes('yahoo_finance') || // specific yahoo pattern
+        lower.includes('market_watch') || // specific marketwatch pattern
+        lower.includes('the_fly') ||
+        lower.includes('benzinga')
+      );
+    };
 
     // If we have symbols, try to fetch company news per symbol and round-robin select
     if (cleanSymbols.length > 0) {
@@ -43,6 +59,7 @@ export async function getNews(symbols?: string[]): Promise<MarketNewsArticle[]> 
         cleanSymbols.map(async (sym) => {
           try {
             const url = `${FINNHUB_BASE_URL}/company-news?symbol=${encodeURIComponent(sym)}&from=${range.from}&to=${range.to}&token=${token}`;
+            // Fetch deeper to find gems
             const articles = await fetchJSON<RawNewsArticle[]>(url, 300);
             perSymbolArticles[sym] = (articles || []).filter(validateArticle);
           } catch (e) {
@@ -53,14 +70,36 @@ export async function getNews(symbols?: string[]): Promise<MarketNewsArticle[]> 
       );
 
       const collected: MarketNewsArticle[] = [];
-      // Round-robin up to 6 picks
-      for (let round = 0; round < maxArticles; round++) {
+      const collectedIds = new Set<number>();
+
+      // Round-robin up to 20 picks to find quality images
+      // Increased max rounds to scan deep into the symbol lists
+      for (let round = 0; round < 10; round++) {
         for (let i = 0; i < cleanSymbols.length; i++) {
           const sym = cleanSymbols[i];
           const list = perSymbolArticles[sym] || [];
-          if (list.length === 0) continue;
-          const article = list.shift();
+
+          // Find next valid article
+          let article = list.shift();
+          while (article) {
+            // Skip if we've seen this ID (unlikely efficiently but safe) or if it's a generic logo
+            if (article.id && collectedIds.has(article.id)) {
+              article = list.shift();
+              continue;
+            }
+
+            if (article.image && isGenericLogo(article.image)) {
+              // Skip generic logo items entirely for Top Stories
+              article = list.shift();
+              continue;
+            }
+
+            break; // Found one!
+          }
+
           if (!article || !validateArticle(article)) continue;
+
+          collectedIds.add(article.id);
           collected.push(formatArticle(article, true, sym, round));
           if (collected.length >= maxArticles) break;
         }
@@ -70,27 +109,45 @@ export async function getNews(symbols?: string[]): Promise<MarketNewsArticle[]> 
       if (collected.length > 0) {
         // Sort by datetime desc
         collected.sort((a, b) => (b.datetime || 0) - (a.datetime || 0));
-        return collected.slice(0, maxArticles);
+        return collected.slice(0, 10);
       }
-      // If none collected, fall through to general news
     }
 
     // General market news fallback or when no symbols provided
-    const generalUrl = `${FINNHUB_BASE_URL}/news?category=general&token=${token}`;
+    const generalUrl = `${FINNHUB_BASE_URL}/news?category=${newsCategory}&token=${token}`;
     const general = await fetchJSON<RawNewsArticle[]>(generalUrl, 300);
 
     const seen = new Set<string>();
-    const unique: RawNewsArticle[] = [];
+    const withGoodImages: RawNewsArticle[] = [];
+    const withLogos: RawNewsArticle[] = [];
+
+    // Scan deeply
     for (const art of general || []) {
       if (!validateArticle(art)) continue;
+
       const key = `${art.id}-${art.url}-${art.headline}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      unique.push(art);
-      if (unique.length >= 20) break; // cap early before final slicing
+
+      if (art.image && !isGenericLogo(art.image)) {
+        withGoodImages.push(art);
+      } else {
+        // Only keep logos as a last resort
+        if (withLogos.length < 5) withLogos.push(art);
+      }
+
+      // Stop once we have enough good photos
+      if (withGoodImages.length >= 15) break;
     }
 
-    const formatted = unique.slice(0, maxArticles).map((a, idx) => formatArticle(a, false, undefined, idx));
+    // Prioritize good images. Fill with logos only if desperately needed to reach a minimum count (e.g. 5)
+    // Otherwise just show the good ones.
+    let combined = [...withGoodImages];
+    if (combined.length < 5) {
+      combined = [...combined, ...withLogos];
+    }
+
+    const formatted = combined.slice(0, 10).map((a, idx) => formatArticle(a, false, undefined, idx));
     return formatted;
   } catch (err) {
     console.error('getNews error:', err);
@@ -179,3 +236,84 @@ export const searchStocks = cache(async (query?: string): Promise<StockWithWatch
   }
 });
 
+export async function getStockQuotes(symbols: string[]): Promise<Record<string, any>> {
+  if (!symbols || symbols.length === 0) return {};
+  const token = process.env.FINNHUB_API_KEY ?? NEXT_PUBLIC_FINNHUB_API_KEY;
+  if (!token) return {};
+
+  const quotes: Record<string, any> = {};
+  await Promise.all(symbols.map(async (sym) => {
+    try {
+      const url = `${FINNHUB_BASE_URL}/quote?symbol=${encodeURIComponent(sym)}&token=${token}`;
+      const data = await fetchJSON<any>(url, 30); // 30s revalidate
+      if (data) {
+        quotes[sym] = {
+          price: data.c,
+          change: data.d,
+          percentChange: data.dp,
+        };
+      }
+    } catch (e) {
+      console.error(`Error fetching quote for ${sym}:`, e);
+    }
+  }));
+  return quotes;
+}
+
+export async function getStockProfiles(symbols: string[]): Promise<Record<string, any>> {
+  if (!symbols || symbols.length === 0) return {};
+  const token = process.env.FINNHUB_API_KEY ?? NEXT_PUBLIC_FINNHUB_API_KEY;
+  if (!token) return {};
+
+  const profiles: Record<string, any> = {};
+  await Promise.all(symbols.map(async (sym) => {
+    try {
+      const url = `${FINNHUB_BASE_URL}/stock/profile2?symbol=${encodeURIComponent(sym)}&token=${token}`;
+      const data = await fetchJSON<any>(url, 3600); // 1h cache
+      if (data) {
+        profiles[sym] = data;
+      }
+    } catch (e) {
+      console.error(`Error fetching profile for ${sym}:`, e);
+    }
+  }));
+  return profiles;
+}
+export async function getBasicFinancials(symbols: string[]): Promise<Record<string, any>> {
+  if (!symbols || symbols.length === 0) return {};
+  const token = process.env.FINNHUB_API_KEY ?? NEXT_PUBLIC_FINNHUB_API_KEY;
+  if (!token) return {};
+
+  const financials: Record<string, any> = {};
+  await Promise.all(symbols.map(async (sym) => {
+    try {
+      const url = `${FINNHUB_BASE_URL}/stock/metric?symbol=${encodeURIComponent(sym)}&metric=all&token=${token}`;
+      const data = await fetchJSON<any>(url, 3600); // 1h cache
+      if (data) {
+        financials[sym] = data.metric || {};
+      }
+    } catch (e) {
+      console.error(`Error fetching financials for ${sym}:`, e);
+    }
+  }));
+  return financials;
+}
+
+export async function getCompanyNews(symbol: string): Promise<MarketNewsArticle[]> {
+  try {
+    const range = getDateRange(3);
+    const token = process.env.FINNHUB_API_KEY ?? NEXT_PUBLIC_FINNHUB_API_KEY;
+    if (!token) throw new Error('FINNHUB API key is not configured');
+
+    const url = `${FINNHUB_BASE_URL}/company-news?symbol=${encodeURIComponent(symbol)}&from=${range.from}&to=${range.to}&token=${token}`;
+    const articles = await fetchJSON<RawNewsArticle[]>(url, 300);
+
+    return (articles || [])
+      .filter(validateArticle)
+      .map((a, idx) => formatArticle(a, true, symbol, idx))
+      .slice(0, 5);
+  } catch (err) {
+    console.error(`getCompanyNews error for ${symbol}:`, err);
+    return [];
+  }
+}

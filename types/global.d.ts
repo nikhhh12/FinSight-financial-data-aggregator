@@ -71,6 +71,7 @@ declare global {
         id: string;
         name: string;
         email: string;
+        image?: string;
     };
 
     type Stock = {
@@ -108,7 +109,7 @@ declare global {
         isInWatchlist: boolean;
         showTrashIcon?: boolean;
         type?: 'button' | 'icon';
-        onWatchlistChange?: (symbol: string, isAdded: boolean) => void;
+        onWatchlistChange?: (symbol: string, isAdded: boolean, company?: string) => void;
     };
 
     type QuoteData = {
@@ -153,7 +154,7 @@ declare global {
     };
 
     type MarketNewsArticle = {
-        id: number;
+        id: string | number;
         headline: string;
         summary: string;
         source: string;
@@ -217,4 +218,4 @@ declare global {
     };
 }
 
-export {};
+export { };
