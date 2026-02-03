@@ -20,11 +20,12 @@ interface WatchlistStock {
 interface WatchlistProps {
     initialWatchlist: WatchlistStock[];
     email: string;
+    showAll?: boolean;
 }
 
-const Watchlist = ({ initialWatchlist, email }: WatchlistProps) => {
-    // Limit to 6 items for the dashboard view to match mockup expectation (3x2)
-    const displayItems = initialWatchlist.slice(0, 6);
+const Watchlist = ({ initialWatchlist, email, showAll = false }: WatchlistProps) => {
+    // Limit to 6 items for the dashboard view to match mockup expectation (3x2) unless showAll is true
+    const displayItems = showAll ? initialWatchlist : initialWatchlist.slice(0, 6);
 
     const handleWatchlistChange = async (symbol: string, isAdded: boolean, company?: string) => {
         try {
@@ -41,10 +42,12 @@ const Watchlist = ({ initialWatchlist, email }: WatchlistProps) => {
     return (
         <div className="flex flex-col gap-4 w-full h-full bg-gray-800 rounded-xl p-6 border border-gray-700 shadow-sm">
             <div className="flex items-center justify-between mb-2">
-                <h3 className="text-xl font-bold text-gray-100">Your Watchlist</h3>
-                <Link href="/watchlist" className="text-sm text-gray-400 hover:text-gray-100 transition-colors">
-                    View all
-                </Link>
+                <h3 className="text-xl font-bold text-gray-100">{showAll ? 'My Watchlist' : 'Your Watchlist'}</h3>
+                {!showAll && (
+                    <Link href="/watchlist" className="text-sm text-gray-400 hover:text-gray-100 transition-colors">
+                        View all
+                    </Link>
+                )}
             </div>
 
             {displayItems.length === 0 ? (
